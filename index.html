@@ -158,7 +158,8 @@ li.stop.gone .nm{text-decoration:line-through}
     <div class="start">
       <p id="hint">Chưa có điểm xuất phát. Bấm “Dùng vị trí của chú”, nhập địa chỉ, hoặc chạm thẳng vào bản đồ.</p>
       <button class="act" id="gps">Dùng vị trí của chú</button>
-      <button class="act" id="clr" disabled>Xoá</button>
+      <button class="act" id="clr" disabled>Xoá điểm xuất phát</button>
+      <button class="act" id="rst">Xoá hết đánh dấu</button>
     </div>
     <div class="addr">
       <form id="af" role="search">
@@ -570,6 +571,41 @@ function render(){
     +`Nền bản đồ là sông và đường trục chính lấy từ OpenStreetMap, không phải bản đồ đầy đủ — dùng để định hướng, còn chỉ đường chi tiết thì bấm sang Google Maps. `
     +`Chặng nối với điểm xuất phát vẽ nét đứt vì chỉ ước lượng theo đường chim bay ×${DETOUR}; các chặng còn lại là đường đi thật. `
     +`Địa chỉ có dấu “đã xác minh” là lấy từ trang chính thức của cửa hàng; các địa chỉ còn lại suy ra từ toạ độ đã kiểm chứng nên tên đường đúng, số nhà có thể xê xích.`;
+  save();
+}
+
+/* ---------- nhớ tiến độ ----------
+   Lưu ngay trong máy (localStorage), không gửi đi đâu cả. Nhờ vậy chú đóng trang,
+   tắt máy, hôm sau mở lại vẫn còn nguyên đánh dấu. Lưu ý: mỗi trình duyệt có kho
+   riêng, nên đánh dấu trên Chrome sẽ KHÔNG hiện ở Safari hay máy khác.
+   Chỉ lưu thứ chú tự chọn; phần chia ngày và thứ tự đường đi tính lại được vì
+   thuật toán chạy cố định (cùng dữ liệu vào thì luôn ra cùng kết quả). */
+const KEY="lotrinh-thaophuong-v1";
+function save(){
+  try{
+    localStorage.setItem(KEY,JSON.stringify({me,state,nDays,perStop,sessCap,day}));
+  }catch(e){ /* chế độ riêng tư hoặc hết dung lượng — cứ chạy tiếp, chỉ là không nhớ được */ }
+}
+function load(){
+  let d;
+  try{ d=JSON.parse(localStorage.getItem(KEY)||"null"); }catch(e){ return; }
+  if(!d || typeof d!=="object") return;
+  if(d.me && typeof d.me.la==="number" && typeof d.me.lo==="number") me=d.me;
+  if(d.state && typeof d.state==="object")
+    Object.entries(d.state).forEach(([k,v])=>{ if(v==="done"||v==="skip") state[k]=v; });
+  if([3,4,5].includes(d.nDays)) nDays=d.nDays;
+  if([15,20,25,30].includes(d.perStop)) perStop=d.perStop;
+  if([180,240,300].includes(d.sessCap)) sessCap=d.sessCap;
+  if(Number.isInteger(d.day) && d.day>=0 && d.day<nDays) day=d.day;
+  if(me){
+    hint.textContent=`Điểm xuất phát đã lưu (${me.la.toFixed(5)}, ${me.lo.toFixed(5)}). Chạm vào bản đồ để đổi.`;
+    document.getElementById("clr").disabled=false;
+  }
+}
+function resetAll(){
+  Object.keys(state).forEach(k=>delete state[k]);
+  try{ localStorage.removeItem(KEY); }catch(e){}
+  SPLIT={}; baseCache={}; render();
 }
 
 /* ---------- controls ---------- */
@@ -699,6 +735,13 @@ af.addEventListener("submit",async e=>{
 let rt;
 window.addEventListener("resize",()=>{ clearTimeout(rt); rt=setTimeout(()=>{ baseCache={}; render(); },180); });
 
+document.getElementById("rst").addEventListener("click",()=>{
+  const n=Object.keys(state).length;
+  if(!n){ return; }
+  if(confirm(`Xoá đánh dấu của ${n} điểm và làm lại từ đầu?`)) resetAll();
+});
+
+load();          // đọc tiến độ đã lưu TRƯỚC khi vẽ, để trang mở ra đúng như lúc chú đóng
 drawControls();
 render();
 </script>
