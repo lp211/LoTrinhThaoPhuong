@@ -108,6 +108,11 @@ li.stop.gone .nm{text-decoration:line-through}
 .vh{position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap}
 .replan{padding:0 12px 12px; display:flex; gap:9px; flex-wrap:wrap; align-items:center}
 .replan p{margin:0; flex:1 1 220px; font-size:.82rem; color:var(--dim)}
+.danger{padding:12px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; background:var(--warnbg)}
+.danger p{margin:0; flex:1 1 260px; font-size:.8rem; color:var(--ink)}
+.danger p b{font-weight:650}
+button.act.warn{border-color:var(--am); color:var(--am); background:transparent; font-weight:600}
+button.act.warn:hover{background:var(--am); color:var(--card)}
 .addr{padding:0 12px 12px}
 .addr form{display:flex; gap:8px}
 /* 16px là mức tối thiểu, dưới mức đó Safari trên iPhone tự phóng to trang khi bấm vào ô nhập */
@@ -160,6 +165,7 @@ li.stop.gone .nm{text-decoration:line-through}
     <div class="replan">
       <p id="rspHint"></p>
       <button class="act" id="und" disabled>↩ Hoàn tác</button>
+      <button class="act" id="red" disabled>↪ Làm lại</button>
       <button class="act" id="rsp" disabled>Chia lại các điểm còn lại</button>
       <button class="act" id="rst" disabled>Xoá hết đánh dấu</button>
     </div>
@@ -196,6 +202,13 @@ li.stop.gone .nm{text-decoration:line-through}
 
   <div class="card sess" id="am"></div>
   <div class="card sess" id="pm"></div>
+
+  <div class="card danger">
+    <p><b>Bắt đầu lại toàn bộ.</b> Xoá sạch mọi thứ đã lưu trong máy — đánh dấu đã đi,
+       điểm xuất phát, cài đặt, cách chia ngày và cả lịch sử hoàn tác — rồi lập kế hoạch
+       mới từ đầu. Riêng thao tác này không hoàn tác lại được.</p>
+    <button class="act warn" id="hrd">Xoá sạch và lập kế hoạch mới</button>
+  </div>
   <p class="foot" id="foot"></p>
 </div>
 
@@ -589,6 +602,7 @@ function render(){
   rsp.disabled=!doneN;
   document.getElementById("rst").disabled=!doneN;
   document.getElementById("und").disabled=!UNDO.length;
+  document.getElementById("red").disabled=!REDO.length;
   document.getElementById("rspHint").textContent = !doneN
     ? `Đi được một phần rồi thì bấm nút này để dồn đều những điểm còn lại vào ${nDays} ngày.`
     : `Còn ${leftN} điểm chưa đi, hiện chia ${perDay.join(" / ")}. Bấm chia lại để dồn đều ${leftN} điểm đó vào ${nDays} ngày (${Math.floor(leftN/nDays)}–${Math.ceil(leftN/nDays)} điểm/ngày).`;
@@ -619,13 +633,17 @@ function render(){
    lịch sử — đúng lúc cần hoàn tác nhất (lỡ bấm Chia lại rồi tab bị dẹp) lại không
    còn gì để trả về. */
 const MAXUNDO=40;
-let UNDO=[];
-const snap=()=>({ state:{...state}, LAB:LAB?LAB.slice():null, LABK:LAB?LAB.K:null,
-                  nDays, perStop, sessCap, day, me:me?{...me}:null });
-function mark(){ UNDO.push(snap()); if(UNDO.length>MAXUNDO) UNDO.shift(); }
-function undo(){
-  const s=UNDO.pop();
-  if(!s) return;
+let UNDO=[], REDO=[];
+/* Mỗi ảnh chụp mang theo TÊN của thao tác diễn ra ngay sau nó, để hộp xác nhận nói
+   rõ sắp hoàn tác cái gì — hỏi trống không thì chú cũng chỉ bấm Đồng ý cho xong. */
+const snap=lb=>({ state:{...state}, LAB:LAB?LAB.slice():null, LABK:LAB?LAB.K:null,
+                  nDays, perStop, sessCap, day, me:me?{...me}:null, label:lb||"" });
+function mark(label){
+  UNDO.push(snap(label));
+  if(UNDO.length>MAXUNDO) UNDO.shift();
+  REDO=[];        // làm việc mới thì nhánh “làm lại” cũ không còn ý nghĩa
+}
+function apply(s){
   Object.keys(state).forEach(k=>delete state[k]);
   Object.assign(state,s.state);
   if(s.LAB){ LAB=s.LAB.slice(); LAB.K=s.LABK; } else LAB=null;
@@ -638,6 +656,20 @@ function undo(){
   document.getElementById("clr").disabled=!me;
   drawControls();                  // các nút 3/4/5 ngày, 15–30′ phải khớp lại
   render();
+}
+function undo(){
+  if(!UNDO.length) return;
+  const s=UNDO.pop();
+  REDO.push(snap(s.label));        // tình trạng SAU thao tác đó, để còn làm lại
+  if(REDO.length>MAXUNDO) REDO.shift();
+  apply(s);
+}
+function redo(){
+  if(!REDO.length) return;
+  const s=REDO.pop();
+  UNDO.push(snap(s.label));        // tình trạng TRƯỚC thao tác đó, để còn hoàn tác tiếp
+  if(UNDO.length>MAXUNDO) UNDO.shift();
+  apply(s);
 }
 
 /* Số 1 trong tên khoá là phiên bản dữ liệu. Ảnh chụp có giữ bảng chia ngày (LAB),
@@ -664,13 +696,14 @@ function cleanSnap(o){
   const lab = okLab(o.LAB,o.nDays) && o.LABK===o.nDays ? o.LAB.slice() : null;
   return { state:st, LAB:lab, LABK:lab?o.nDays:null,
            nDays:o.nDays, perStop:o.perStop, sessCap:o.sessCap, day:o.day,
-           me: okMe(o.me)?{la:o.me.la,lo:o.me.lo}:null };
+           me: okMe(o.me)?{la:o.me.la,lo:o.me.lo}:null,
+           label: typeof o.label==="string" ? o.label.slice(0,80) : "" };
 }
 
 function save(){
   try{
     localStorage.setItem(KEY,JSON.stringify({me,state,nDays,perStop,sessCap,day,
-      LAB:LAB?Array.from(LAB):null, LABK:LAB?LAB.K:null, undo:UNDO}));
+      LAB:LAB?Array.from(LAB):null, LABK:LAB?LAB.K:null, undo:UNDO, redo:REDO}));
   }catch(e){ /* chế độ riêng tư hoặc hết dung lượng — cứ chạy tiếp, chỉ là không nhớ được */ }
 }
 function load(){
@@ -687,10 +720,24 @@ function load(){
   if(okLab(d.LAB,nDays) && d.LABK===nDays){ LAB=d.LAB.slice(); LAB.K=nDays; }
   if(Array.isArray(d.undo))
     UNDO=d.undo.map(cleanSnap).filter(Boolean).slice(-MAXUNDO);
+  if(Array.isArray(d.redo))
+    REDO=d.redo.map(cleanSnap).filter(Boolean).slice(-MAXUNDO);
   if(me){
     hint.textContent=`Điểm xuất phát đã lưu (${me.la.toFixed(5)}, ${me.lo.toFixed(5)}). Chạm vào bản đồ để đổi.`;
     document.getElementById("clr").disabled=false;
   }
+}
+/* Xoá sạch: về đúng như lần đầu mở trang. Khác “Xoá hết đánh dấu” ở chỗ nó bỏ luôn
+   điểm xuất phát, cài đặt, cách chia ngày và cả lịch sử hoàn tác — nên chính nó thì
+   không hoàn tác lại được, và phải hỏi hai lần. */
+function hardReset(){
+  Object.keys(state).forEach(k=>delete state[k]);
+  me=null; nDays=3; perStop=25; sessCap=240; day=0; LAB=null;
+  UNDO=[]; REDO=[]; SPLIT={}; baseCache={};
+  try{ localStorage.removeItem(KEY); }catch(e){}
+  hint.textContent=NOSTART; ares.textContent="";
+  document.getElementById("clr").disabled=true;
+  drawControls(); render();
 }
 function resetAll(){
   Object.keys(state).forEach(k=>delete state[k]);
@@ -704,24 +751,24 @@ function seg(el,vals,cur,fn,suffix){
   el.querySelectorAll("button").forEach((b,i)=>b.addEventListener("click",()=>{ fn(vals[i]); }));
 }
 function drawControls(){
-  seg(document.getElementById("segDays"),[3,4,5],nDays,v=>{mark(); nDays=v; LAB=null; SPLIT={}; drawControls(); render();}," ngày");
-  seg(document.getElementById("segMin"),[15,20,25,30],perStop,v=>{mark(); perStop=v; drawControls(); render();},"′");
-  seg(document.getElementById("segSess"),[180,240,300],sessCap,v=>{mark(); sessCap=v; drawControls(); render();},"′");
+  seg(document.getElementById("segDays"),[3,4,5],nDays,v=>{mark(`đổi sang ${v} ngày`); nDays=v; LAB=null; SPLIT={}; drawControls(); render();}," ngày");
+  seg(document.getElementById("segMin"),[15,20,25,30],perStop,v=>{mark(`đổi thành ${v} phút mỗi điểm`); perStop=v; drawControls(); render();},"′");
+  seg(document.getElementById("segSess"),[180,240,300],sessCap,v=>{mark(`đổi giới hạn buổi thành ${v} phút`); sessCap=v; drawControls(); render();},"′");
 }
 
 document.addEventListener("click",e=>{
   const t=e.target; if(!t.getAttribute) return;
   const d=t.getAttribute("data-done"), s=t.getAttribute("data-skip"), u=t.getAttribute("data-undo");
-  if(d){ mark(); state[d]="done"; render(); }
-  if(s){ mark(); state[s]="skip"; render(); }
-  if(u){ mark(); delete state[u]; render(); }
+  if(d){ mark(`đánh dấu xong ${d}`); state[d]="done"; render(); }
+  if(s){ mark(`bỏ qua ${s}`); state[s]="skip"; render(); }
+  if(u){ mark(`khôi phục ${u}`); delete state[u]; render(); }
 });
 const map=document.getElementById("map");
 const hint=document.getElementById("hint"), ares=document.getElementById("ares");
 const NOSTART="Chưa có điểm xuất phát. Bấm “Dùng vị trí của chú”, nhập địa chỉ, hoặc chạm thẳng vào bản đồ.";
 
 function setMe(la,lo,msg){
-  mark();
+  mark("đổi điểm xuất phát");
   me={la,lo};
   hint.textContent=msg;
   document.getElementById("clr").disabled=false;
@@ -746,11 +793,27 @@ document.getElementById("gps").addEventListener("click",()=>{
     {enableHighAccuracy:true,timeout:8000});
 });
 document.getElementById("clr").addEventListener("click",()=>{
-  mark();
+  mark("xoá điểm xuất phát");
   me=null; hint.textContent=NOSTART; ares.textContent="";
   document.getElementById("clr").disabled=true; baseCache={}; SPLIT={}; render();
 });
-document.getElementById("und").addEventListener("click",undo);
+/* Hỏi lại trước khi hoàn tác / làm lại: đi đường xóc, ngón tay to, nút lại nằm sát
+   nhau — bấm nhầm là mất công. Hộp thoại nói rõ tên thao tác chứ không hỏi trống không. */
+const nameOf=s=>s && s.label ? `“${s.label}”` : "thao tác vừa rồi";
+document.getElementById("und").addEventListener("click",()=>{
+  if(!UNDO.length) return;
+  if(confirm(`Hoàn tác ${nameOf(UNDO[UNDO.length-1])}?`)) undo();
+});
+document.getElementById("red").addEventListener("click",()=>{
+  if(!REDO.length) return;
+  if(confirm(`Làm lại ${nameOf(REDO[REDO.length-1])}?`)) redo();
+});
+document.getElementById("hrd").addEventListener("click",()=>{
+  const n=Object.keys(state).length;
+  if(!confirm(`Xoá sạch mọi thứ đã lưu và lập kế hoạch mới?\n\nSẽ mất: ${n} điểm đã đánh dấu, điểm xuất phát, cài đặt, cách chia ngày và lịch sử hoàn tác.`)) return;
+  if(!confirm("Chắc chắn xoá sạch chứ?\n\nRiêng thao tác này KHÔNG hoàn tác lại được.")) return;
+  hardReset();
+});
 
 /* Tìm địa chỉ qua Nominatim (OpenStreetMap).
    Đã thử thực tế: kiểu tìm tự do (q=) chạy tốt với tên địa điểm ("Chợ Bến Thành")
@@ -829,14 +892,14 @@ let rt;
 window.addEventListener("resize",()=>{ clearTimeout(rt); rt=setTimeout(()=>{ baseCache={}; render(); },180); });
 
 document.getElementById("rsp").addEventListener("click",()=>{
-  mark();
+  mark("chia lại các điểm còn lại");
   // LAB=null buộc chia lại; lúc này sức chứa tính theo số điểm chưa đi
   LAB=null; SPLIT={}; baseCache={}; day=0; render();
 });
 document.getElementById("rst").addEventListener("click",()=>{
   const n=Object.keys(state).length;
   if(!n) return;
-  if(confirm(`Xoá đánh dấu của ${n} điểm và làm lại từ đầu?`)){ mark(); resetAll(); }
+  if(confirm(`Xoá đánh dấu của ${n} điểm và làm lại từ đầu?`)){ mark(`xoá hết đánh dấu (${n} điểm)`); resetAll(); }
 });
 
 load();          // đọc tiến độ đã lưu TRƯỚC khi vẽ, để trang mở ra đúng như lúc chú đóng
