@@ -159,13 +159,14 @@ li.stop.gone .nm{text-decoration:line-through}
     </div>
     <div class="replan">
       <p id="rspHint"></p>
+      <button class="act" id="und" disabled>↩ Hoàn tác</button>
       <button class="act" id="rsp" disabled>Chia lại các điểm còn lại</button>
+      <button class="act" id="rst" disabled>Xoá hết đánh dấu</button>
     </div>
     <div class="start">
       <p id="hint">Chưa có điểm xuất phát. Bấm “Dùng vị trí của chú”, nhập địa chỉ, hoặc chạm thẳng vào bản đồ.</p>
       <button class="act" id="gps">Dùng vị trí của chú</button>
       <button class="act" id="clr" disabled>Xoá điểm xuất phát</button>
-      <button class="act" id="rst">Xoá hết đánh dấu</button>
     </div>
     <div class="addr">
       <form id="af" role="search">
@@ -580,11 +581,14 @@ function render(){
       +`<ol>${gone.map(i=>row(i,0)).join("")}</ol>`;
   }
 
-  /* nút chia lại: chỉ có việc để làm khi đã đi được một phần */
+  /* nút chia lại / xoá hết: chỉ có việc để làm khi đã đi được một phần.
+     Nút hoàn tác bật khi còn thao tác để trả lại. */
   const doneN=Object.keys(state).length, leftN=N-doneN;
   const rsp=document.getElementById("rsp");
   const perDay=[...Array(nDays).keys()].map(d=>active(d).length);
   rsp.disabled=!doneN;
+  document.getElementById("rst").disabled=!doneN;
+  document.getElementById("und").disabled=!UNDO.length;
   document.getElementById("rspHint").textContent = !doneN
     ? `Đi được một phần rồi thì bấm nút này để dồn đều những điểm còn lại vào ${nDays} ngày.`
     : `Còn ${leftN} điểm chưa đi, hiện chia ${perDay.join(" / ")}. Bấm chia lại để dồn đều ${leftN} điểm đó vào ${nDays} ngày (${Math.floor(leftN/nDays)}–${Math.ceil(leftN/nDays)} điểm/ngày).`;
@@ -606,6 +610,33 @@ function render(){
    riêng, nên đánh dấu trên Chrome sẽ KHÔNG hiện ở Safari hay máy khác.
    Chỉ lưu thứ chú tự chọn; phần chia ngày và thứ tự đường đi tính lại được vì
    thuật toán chạy cố định (cùng dữ liệu vào thì luôn ra cùng kết quả). */
+/* ---------- hoàn tác ----------
+   Chụp lại toàn bộ tình trạng TRƯỚC mỗi thao tác, bấm Hoàn tác thì trả về y như cũ.
+   Che được cả những nút xoá nhiều thứ như “Chia lại” hay “Xoá hết đánh dấu”:
+   lỡ tay vẫn lấy lại được. Không lưu lịch sử hoàn tác xuống máy — mở lại trang là
+   bắt đầu lại từ đầu, nhưng đánh dấu thì vẫn còn nguyên. */
+const MAXUNDO=40;
+let UNDO=[];
+const snap=()=>({ state:{...state}, LAB:LAB?LAB.slice():null, LABK:LAB?LAB.K:null,
+                  nDays, perStop, sessCap, day, me:me?{...me}:null });
+function mark(){ UNDO.push(snap()); if(UNDO.length>MAXUNDO) UNDO.shift(); }
+function undo(){
+  const s=UNDO.pop();
+  if(!s) return;
+  Object.keys(state).forEach(k=>delete state[k]);
+  Object.assign(state,s.state);
+  if(s.LAB){ LAB=s.LAB.slice(); LAB.K=s.LABK; } else LAB=null;
+  nDays=s.nDays; perStop=s.perStop; sessCap=s.sessCap; day=s.day;
+  me=s.me?{...s.me}:null;
+  SPLIT={}; baseCache={};          // tính lại được từ LAB + điểm xuất phát nên cứ xoá
+  hint.textContent = me
+    ? `Điểm xuất phát: ${me.la.toFixed(5)}, ${me.lo.toFixed(5)}. Chạm vào bản đồ để đổi.`
+    : NOSTART;
+  document.getElementById("clr").disabled=!me;
+  drawControls();                  // các nút 3/4/5 ngày, 15–30′ phải khớp lại
+  render();
+}
+
 const KEY="lotrinh-thaophuong-v1";
 function save(){
   try{
@@ -640,23 +671,24 @@ function seg(el,vals,cur,fn,suffix){
   el.querySelectorAll("button").forEach((b,i)=>b.addEventListener("click",()=>{ fn(vals[i]); }));
 }
 function drawControls(){
-  seg(document.getElementById("segDays"),[3,4,5],nDays,v=>{nDays=v; LAB=null; drawControls(); render();}," ngày");
-  seg(document.getElementById("segMin"),[15,20,25,30],perStop,v=>{perStop=v; drawControls(); render();},"′");
-  seg(document.getElementById("segSess"),[180,240,300],sessCap,v=>{sessCap=v; drawControls(); render();},"′");
+  seg(document.getElementById("segDays"),[3,4,5],nDays,v=>{mark(); nDays=v; LAB=null; SPLIT={}; drawControls(); render();}," ngày");
+  seg(document.getElementById("segMin"),[15,20,25,30],perStop,v=>{mark(); perStop=v; drawControls(); render();},"′");
+  seg(document.getElementById("segSess"),[180,240,300],sessCap,v=>{mark(); sessCap=v; drawControls(); render();},"′");
 }
 
 document.addEventListener("click",e=>{
   const t=e.target; if(!t.getAttribute) return;
   const d=t.getAttribute("data-done"), s=t.getAttribute("data-skip"), u=t.getAttribute("data-undo");
-  if(d){ state[d]="done"; render(); }
-  if(s){ state[s]="skip"; render(); }
-  if(u){ delete state[u]; render(); }
+  if(d){ mark(); state[d]="done"; render(); }
+  if(s){ mark(); state[s]="skip"; render(); }
+  if(u){ mark(); delete state[u]; render(); }
 });
 const map=document.getElementById("map");
 const hint=document.getElementById("hint"), ares=document.getElementById("ares");
 const NOSTART="Chưa có điểm xuất phát. Bấm “Dùng vị trí của chú”, nhập địa chỉ, hoặc chạm thẳng vào bản đồ.";
 
 function setMe(la,lo,msg){
+  mark();
   me={la,lo};
   hint.textContent=msg;
   document.getElementById("clr").disabled=false;
@@ -681,9 +713,11 @@ document.getElementById("gps").addEventListener("click",()=>{
     {enableHighAccuracy:true,timeout:8000});
 });
 document.getElementById("clr").addEventListener("click",()=>{
+  mark();
   me=null; hint.textContent=NOSTART; ares.textContent="";
   document.getElementById("clr").disabled=true; baseCache={}; SPLIT={}; render();
 });
+document.getElementById("und").addEventListener("click",undo);
 
 /* Tìm địa chỉ qua Nominatim (OpenStreetMap).
    Đã thử thực tế: kiểu tìm tự do (q=) chạy tốt với tên địa điểm ("Chợ Bến Thành")
@@ -762,13 +796,14 @@ let rt;
 window.addEventListener("resize",()=>{ clearTimeout(rt); rt=setTimeout(()=>{ baseCache={}; render(); },180); });
 
 document.getElementById("rsp").addEventListener("click",()=>{
+  mark();
   // LAB=null buộc chia lại; lúc này sức chứa tính theo số điểm chưa đi
   LAB=null; SPLIT={}; baseCache={}; day=0; render();
 });
 document.getElementById("rst").addEventListener("click",()=>{
   const n=Object.keys(state).length;
-  if(!n){ return; }
-  if(confirm(`Xoá đánh dấu của ${n} điểm và làm lại từ đầu?`)) resetAll();
+  if(!n) return;
+  if(confirm(`Xoá đánh dấu của ${n} điểm và làm lại từ đầu?`)){ mark(); resetAll(); }
 });
 
 load();          // đọc tiến độ đã lưu TRƯỚC khi vẽ, để trang mở ra đúng như lúc chú đóng
