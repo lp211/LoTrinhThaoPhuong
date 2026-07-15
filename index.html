@@ -106,6 +106,8 @@ li.stop.gone .nm{text-decoration:line-through}
 .foot b{color:var(--ink); font-weight:600}
 
 .vh{position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap}
+.replan{padding:0 12px 12px; display:flex; gap:9px; flex-wrap:wrap; align-items:center}
+.replan p{margin:0; flex:1 1 220px; font-size:.82rem; color:var(--dim)}
 .addr{padding:0 12px 12px}
 .addr form{display:flex; gap:8px}
 /* 16px là mức tối thiểu, dưới mức đó Safari trên iPhone tự phóng to trang khi bấm vào ô nhập */
@@ -154,6 +156,10 @@ li.stop.gone .nm{text-decoration:line-through}
         <div class="seg" id="segSess"></div>
         <div class="hintline">Dùng để cảnh báo khi buổi bị quá tải.</div>
       </div>
+    </div>
+    <div class="replan">
+      <p id="rspHint"></p>
+      <button class="act" id="rsp" disabled>Chia lại các điểm còn lại</button>
     </div>
     <div class="start">
       <p id="hint">Chưa có điểm xuất phát. Bấm “Dùng vị trí của chú”, nhập địa chỉ, hoặc chạm thẳng vào bản đồ.</p>
@@ -248,10 +254,21 @@ const GD=G.map(a=>G.map(b=>{ let m=Infinity; for(const i of a) for(const j of b)
 /* PRNG có hạt giống cố định -> cùng lựa chọn thì luôn ra cùng kết quả */
 function rng(seed){ let s=seed>>>0; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
 
-/* ---------- chia ngày: k-medoids có giới hạn sức chứa ---------- */
+/* ---------- chia ngày: k-medoids có giới hạn sức chứa ----------
+   Sức chứa tính theo số điểm CHƯA ĐI, không phải cả 49. Nhờ vậy khi chú đã đi
+   được một phần rồi bấm chia lại (hoặc đổi số ngày), phần việc còn lại mới được
+   dàn đều; nếu tính theo cả 49 thì ngày nào cũng còn ôm chỗ cho những điểm chú
+   đã làm xong. Điểm đã xong vẫn được gán ngày để còn hiện trong mục “Đã xong”,
+   nhưng không chiếm chỗ nữa (trọng số 0). */
 function clusterDays(K){
   if(K===1) return new Array(N).fill(0);
-  const cap=Math.ceil(N/K)+2;
+  const asz=gi=>G[gi].filter(i=>!state[S[i].n]).length;
+  const left=[...G.keys()].reduce((s,gi)=>s+asz(gi),0) || N;   // đi hết rồi thì quay về chia theo cả 49
+  /* Không cho dư sức chứa. Đo thực tế: để dư 2 thì lúc chia lại có ngày ôm tới 17
+     điểm trong khi ngày khác chỉ 12; siết về 0 thì thành 14/15/15 mà quãng đường
+     còn ngắn hơn (168 km so với 173 km). Chia lần đầu cho cả 49 điểm thì hai cách
+     ra kết quả y hệt nhau, nên siết lại không làm hỏng kế hoạch ban đầu. */
+  const cap=Math.ceil(left/K);
   const assign=meds=>{
     const order=[...G.keys()].sort((x,y)=>{
       const sx=meds.map(m=>GD[x][m]).sort((a,b)=>a-b);
@@ -262,8 +279,8 @@ function clusterDays(K){
     for(const i of order){
       const ks=[...Array(K).keys()].sort((a,b)=>GD[i][meds[a]]-GD[i][meds[b]]);
       let ok=false;
-      for(const k of ks){ if(load[k]+GSZ[i]<=cap){ lab[i]=k; load[k]+=GSZ[i]; ok=true; break; } }
-      if(!ok){ let k=0; for(let q=1;q<K;q++) if(load[q]<load[k]) k=q; lab[i]=k; load[k]+=GSZ[i]; }
+      for(const k of ks){ if(load[k]+asz(i)<=cap){ lab[i]=k; load[k]+=asz(i); ok=true; break; } }
+      if(!ok){ let k=0; for(let q=1;q<K;q++) if(load[q]<load[k]) k=q; lab[i]=k; load[k]+=asz(i); }
     }
     return lab;
   };
@@ -282,7 +299,7 @@ function clusterDays(K){
       if(nm.every((v,i)=>v===meds[i])) break;
       meds=nm; lab=assign(meds);
     }
-    const c=[...G.keys()].reduce((s,i)=>s+GD[i][meds[lab[i]]]*GSZ[i],0);
+    const c=[...G.keys()].reduce((s,i)=>s+GD[i][meds[lab[i]]]*asz(i),0);
     if(c<bc){ bc=c; best=lab.slice(); }
   }
   const out=new Array(N).fill(-1);
@@ -563,6 +580,15 @@ function render(){
       +`<ol>${gone.map(i=>row(i,0)).join("")}</ol>`;
   }
 
+  /* nút chia lại: chỉ có việc để làm khi đã đi được một phần */
+  const doneN=Object.keys(state).length, leftN=N-doneN;
+  const rsp=document.getElementById("rsp");
+  const perDay=[...Array(nDays).keys()].map(d=>active(d).length);
+  rsp.disabled=!doneN;
+  document.getElementById("rspHint").textContent = !doneN
+    ? `Đi được một phần rồi thì bấm nút này để dồn đều những điểm còn lại vào ${nDays} ngày.`
+    : `Còn ${leftN} điểm chưa đi, hiện chia ${perDay.join(" / ")}. Bấm chia lại để dồn đều ${leftN} điểm đó vào ${nDays} ngày (${Math.floor(leftN/nDays)}–${Math.ceil(leftN/nDays)} điểm/ngày).`;
+
   const tot=N*perStop/60;
   document.getElementById("dayHint").textContent=`${N} điểm, tối đa ${Math.max(...[...Array(nDays).keys()].map(d=>dayIds(d).length))} điểm/ngày.`;
   document.getElementById("minHint").textContent=`Cả 49 điểm ≈ ${tot.toFixed(1)} giờ chỉ tính thời gian trong cửa hàng.`;
@@ -735,6 +761,10 @@ af.addEventListener("submit",async e=>{
 let rt;
 window.addEventListener("resize",()=>{ clearTimeout(rt); rt=setTimeout(()=>{ baseCache={}; render(); },180); });
 
+document.getElementById("rsp").addEventListener("click",()=>{
+  // LAB=null buộc chia lại; lúc này sức chứa tính theo số điểm chưa đi
+  LAB=null; SPLIT={}; baseCache={}; day=0; render();
+});
 document.getElementById("rst").addEventListener("click",()=>{
   const n=Object.keys(state).length;
   if(!n){ return; }
