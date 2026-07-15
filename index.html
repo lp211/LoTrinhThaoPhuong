@@ -11,27 +11,27 @@
   --paper:#E7ECE8; --card:#F6F9F6; --edge:#CDD7D0; --ink:#12191A; --dim:#5C6B66;
   --am:#C4362F; --pm:#35507F; --home:#1F4E50; --done:#3E7A4E; --skip:#93A09B;
   --btn:#E0E7E2; --btnh:#D2DBD5; --shadow:rgba(18,25,26,.10);
-  --land:#EDF1EE; --water:#BFD4DA; --road:#B3BFB8; --road2:#C6D0C9; --warnbg:#F3E2DE;
+  --land:#EDF1EE; --water:#BFD4DA; --road:#B3BFB8; --road2:#C6D0C9; --warnbg:#F3E2DE; --tilefx:none;
 }
 @media (prefers-color-scheme:dark){
   :root{
     --paper:#10171A; --card:#182125; --edge:#2C3A3E; --ink:#E6EDEA; --dim:#93A49F;
     --am:#E4675B; --pm:#7FA0D8; --home:#4FA3A5; --done:#63AE74; --skip:#65726E;
     --btn:#243033; --btnh:#2E3C40; --shadow:rgba(0,0,0,.4);
-    --land:#141C20; --water:#1B3038; --road:#31424A; --road2:#26343A; --warnbg:#3A2622;
+    --land:#141C20; --water:#1B3038; --road:#31424A; --road2:#26343A; --warnbg:#3A2622; --tilefx:invert(1) hue-rotate(180deg) brightness(.86) contrast(.92) saturate(.8);
   }
 }
 :root[data-theme="dark"]{
   --paper:#10171A; --card:#182125; --edge:#2C3A3E; --ink:#E6EDEA; --dim:#93A49F;
   --am:#E4675B; --pm:#7FA0D8; --home:#4FA3A5; --done:#63AE74; --skip:#65726E;
   --btn:#243033; --btnh:#2E3C40; --shadow:rgba(0,0,0,.4);
-  --land:#141C20; --water:#1B3038; --road:#31424A; --road2:#26343A; --warnbg:#3A2622;
+  --land:#141C20; --water:#1B3038; --road:#31424A; --road2:#26343A; --warnbg:#3A2622; --tilefx:invert(1) hue-rotate(180deg) brightness(.86) contrast(.92) saturate(.8);
 }
 :root[data-theme="light"]{
   --paper:#E7ECE8; --card:#F6F9F6; --edge:#CDD7D0; --ink:#12191A; --dim:#5C6B66;
   --am:#C4362F; --pm:#35507F; --home:#1F4E50; --done:#3E7A4E; --skip:#93A09B;
   --btn:#E0E7E2; --btnh:#D2DBD5; --shadow:rgba(18,25,26,.10);
-  --land:#EDF1EE; --water:#BFD4DA; --road:#B3BFB8; --road2:#C6D0C9; --warnbg:#F3E2DE;
+  --land:#EDF1EE; --water:#BFD4DA; --road:#B3BFB8; --road2:#C6D0C9; --warnbg:#F3E2DE; --tilefx:none;
 }
 *{box-sizing:border-box}
 body{
@@ -97,6 +97,10 @@ li.stop.ghost{opacity:.25}
 ol.sortable.over{outline:2px dashed var(--am); outline-offset:3px; border-radius:9px}
 li.drop{padding:11px 9px; border:1px dashed var(--edge); border-radius:9px; color:var(--dim); font-size:.8rem; text-align:center}
 .mtag{font-size:.68rem; font-weight:700; color:var(--am); border:1px solid var(--am); border-radius:20px; padding:1px 7px; letter-spacing:.02em}
+/* Ảnh bản đồ OSM chỉ có bản nền sáng; ban đêm thì lật màu lại cho đỡ chói. */
+.tiles{filter:var(--tilefx)}
+.attr{font-size:.68rem; color:var(--dim); padding:4px 2px 0}
+.attr a{color:var(--dim)}
 li.mark{height:3px; background:var(--am); border-radius:3px; margin:1px 0}
 .mvm{display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; padding:7px; border:1px solid var(--edge); border-radius:8px; background:var(--card)}
 .mvm .mini{display:flex; gap:6px; align-items:center}
@@ -206,6 +210,8 @@ button.act.warn:hover{background:var(--am); color:var(--card)}
 
   <div class="card">
     <svg id="map" role="img" aria-label="Bản đồ lộ trình"></svg>
+    <!-- Giấy phép của OpenStreetMap bắt buộc phải ghi nguồn, không được bỏ. -->
+    <div class="attr">Ảnh bản đồ © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">những người đóng góp cho OpenStreetMap</a></div>
     <div class="stats" id="stats"></div>
   </div>
 
@@ -429,9 +435,42 @@ function makeProj(list){
   const s=Math.min((W-2*pad)/dx,(H-2*pad)/dy);
   const ox=(W-dx*s)/2-x0*s, oy=(H-dy*s)/2+y1*s;
   return {
-    s, fwd:(la,lo)=>{ const m=merc(la,lo); return [m[0]*s+ox, oy-m[1]*s]; },
+    s, ox, oy,
+    fwd:(la,lo)=>{ const m=merc(la,lo); return [m[0]*s+ox, oy-m[1]*s]; },
     inv:(px,py)=>[Math.atan(Math.exp(((oy-py)/s)*Math.PI/180))*360/Math.PI-90, (px-ox)/s]
   };
+}
+
+/* ---------- ảnh bản đồ thật ----------
+   Xếp ô ảnh của OpenStreetMap đúng theo phép chiếu Mercator mà lộ trình đang dùng,
+   nên đường đi và các điểm nằm khớp lên trên ảnh, không lệch.
+   Không cần khoá API, không cần thẻ ngân hàng — khác hẳn Google Maps.
+   Mất mạng thì ô ảnh không tải được, lúc đó nền vector vẽ sẵn ở dưới lộ ra: bản đồ
+   đơn giản hơn nhưng vẫn còn sông và đường trục để định hướng. Vì vậy vẫn vẽ nền
+   vector trước rồi mới đắp ảnh lên trên. */
+const TILEURL=(z,x,y)=>`https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+const TZMIN=9, TZMAX=18, TMAX=60;
+function tileSvg(proj){
+  const {s,ox,oy}=proj;
+  /* Chọn mức phóng sao cho một điểm ảnh của ô ≈ một điểm ảnh trên bản vẽ: nhỏ hơn
+     thì mờ, lớn hơn thì tải thừa ô mà mắt không thấy đẹp thêm. */
+  const z=Math.max(TZMIN,Math.min(TZMAX,Math.round(Math.log2(360*s/256))));
+  const WS=Math.pow(2,z)*256, n=Math.pow(2,z);
+  const px2lo=px=>(px-ox)/s, lo2wx=lo=>(lo+180)/360*WS, wx2px=wx=>(wx/WS*360-180)*s+ox;
+  const py2my=py=>(oy-py)/s, my2wy=my=>(1-my/180)/2*WS, wy2py=wy=>oy-(1-2*wy/WS)*180*s;
+  const tx0=Math.floor(lo2wx(px2lo(0))/256), tx1=Math.floor(lo2wx(px2lo(W))/256);
+  const ty0=Math.floor(my2wy(py2my(0))/256), ty1=Math.floor(my2wy(py2my(H))/256);
+  if((tx1-tx0+1)*(ty1-ty0+1)>TMAX) return "";      // phòng khi tính sai, đừng nã hàng trăm ô
+  const size=256*360*s/WS;
+  let out="";
+  for(let tx=tx0;tx<=tx1;tx++) for(let ty=ty0;ty<=ty1;ty++){
+    if(ty<0||ty>=n) continue;
+    const wx=((tx%n)+n)%n;
+    /* cộng thêm chút xíu cho hai ô kề nhau chồng mép, khỏi hở kẻ trắng */
+    out+=`<image href="${TILEURL(z,wx,ty)}" x="${wx2px(tx*256).toFixed(2)}" y="${wy2py(ty*256).toFixed(2)}"`
+        +` width="${(size+0.7).toFixed(2)}" height="${(size+0.7).toFixed(2)}" preserveAspectRatio="none"/>`;
+  }
+  return `<g class="tiles">${out}</g>`;
 }
 /* nền bản đồ: sông ngòi + đường lớn, vẽ từ dữ liệu OpenStreetMap nhúng sẵn */
 function baseSvg(proj,key){
@@ -593,7 +632,9 @@ function render(){
   document.querySelectorAll(".tab").forEach((t,i)=>t.addEventListener("click",()=>{day=i; render();}));
 
   /* map */
-  let sv=`<rect width="${W}" height="${H}" fill="var(--land)"/>` + baseSvg(proj,`${day}|${nDays}|${W}x${H}|${me?1:0}`);
+  let sv=`<rect width="${W}" height="${H}" fill="var(--land)"/>`
+        + baseSvg(proj,`${day}|${nDays}|${W}x${H}|${me?1:0}`)   // nền dự phòng lúc mất mạng
+        + tileSvg(proj);                                        // ảnh bản đồ thật đắp lên trên
   if(me){
     const draw=(a,b,col)=>{
       const g=(a===ME||b===ME)?null:leg(a,b);
