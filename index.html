@@ -218,6 +218,9 @@ const S = DATA.stops, DM = DATA.D, GEO = DATA.GEO, BASE = DATA.BASE, BOUND = DAT
 const N = S.length, ME = -1;
 const KMH = 22, DETOUR = 1.35;
 
+/* Có cả lựa chọn 1 ngày: không phải để chạy thật trong một ngày (49 điểm thì không
+   nổi), mà để xem toàn bộ 49 điểm nằm trên một vòng duy nhất cho dễ hình dung. */
+const DAYOPTS = [1,3,4,5];
 let nDays = 3, perStop = 25, sessCap = 240;
 let day = 0, me = null;
 const state = {};
@@ -599,16 +602,21 @@ function render(){
   const doneN=Object.keys(state).length, leftN=N-doneN;
   const rsp=document.getElementById("rsp");
   const perDay=[...Array(nDays).keys()].map(d=>active(d).length);
-  rsp.disabled=!doneN;
+  /* Để 1 ngày thì mọi điểm đã nằm chung một ngày rồi, không còn gì để chia. */
+  rsp.disabled=!doneN || nDays===1;
   document.getElementById("rst").disabled=!doneN;
   document.getElementById("und").disabled=!UNDO.length;
   document.getElementById("red").disabled=!REDO.length;
-  document.getElementById("rspHint").textContent = !doneN
+  document.getElementById("rspHint").textContent = nDays===1
+    ? `Đang gom hết vào một ngày nên không có gì để chia lại. Chọn 3, 4 hoặc 5 ngày thì nút này mới dùng được.`
+    : !doneN
     ? `Đi được một phần rồi thì bấm nút này để dồn đều những điểm còn lại vào ${nDays} ngày.`
     : `Còn ${leftN} điểm chưa đi, hiện chia ${perDay.join(" / ")}. Bấm chia lại để dồn đều ${leftN} điểm đó vào ${nDays} ngày (${Math.floor(leftN/nDays)}–${Math.ceil(leftN/nDays)} điểm/ngày).`;
 
   const tot=N*perStop/60;
-  document.getElementById("dayHint").textContent=`${N} điểm, tối đa ${Math.max(...[...Array(nDays).keys()].map(d=>dayIds(d).length))} điểm/ngày.`;
+  document.getElementById("dayHint").textContent = nDays===1
+    ? `Xem cả ${N} điểm trên một vòng duy nhất, để nhìn toàn cảnh — chứ chạy hết trong một ngày thì không nổi.`
+    : `${N} điểm, tối đa ${Math.max(...[...Array(nDays).keys()].map(d=>dayIds(d).length))} điểm/ngày.`;
   document.getElementById("minHint").textContent=`Cả 49 điểm ≈ ${tot.toFixed(1)} giờ chỉ tính thời gian trong cửa hàng.`;
   document.getElementById("foot").innerHTML=
     `<b>Về số liệu:</b> quãng đường lấy từ dữ liệu đường bộ thật (OSRM), tính cả đường một chiều. Thời gian chạy xe ước theo ${KMH} km/h — tốc độ xe máy thực tế trong nội thành có kẹt xe, nên chậm hơn con số Google Maps lúc đường thoáng. `
@@ -686,7 +694,7 @@ const okLab  = (l,k) => Array.isArray(l) && l.length===N
 /* Lọc một ảnh chụp đã lưu; có gì sai thì trả null chứ không tin bừa. */
 function cleanSnap(o){
   if(!o || typeof o!=="object") return null;
-  if(![3,4,5].includes(o.nDays)) return null;
+  if(!DAYOPTS.includes(o.nDays)) return null;
   if(![15,20,25,30].includes(o.perStop)) return null;
   if(![180,240,300].includes(o.sessCap)) return null;
   if(!Number.isInteger(o.day) || o.day<0 || o.day>=o.nDays) return null;
@@ -713,7 +721,7 @@ function load(){
   if(okMe(d.me)) me={la:d.me.la,lo:d.me.lo};
   if(d.state && typeof d.state==="object")
     Object.entries(d.state).forEach(([k,v])=>{ if(okMark(v)) state[k]=v; });
-  if([3,4,5].includes(d.nDays)) nDays=d.nDays;
+  if(DAYOPTS.includes(d.nDays)) nDays=d.nDays;
   if([15,20,25,30].includes(d.perStop)) perStop=d.perStop;
   if([180,240,300].includes(d.sessCap)) sessCap=d.sessCap;
   if(Number.isInteger(d.day) && d.day>=0 && d.day<nDays) day=d.day;
@@ -751,7 +759,7 @@ function seg(el,vals,cur,fn,suffix){
   el.querySelectorAll("button").forEach((b,i)=>b.addEventListener("click",()=>{ fn(vals[i]); }));
 }
 function drawControls(){
-  seg(document.getElementById("segDays"),[3,4,5],nDays,v=>{mark(`đổi sang ${v} ngày`); nDays=v; LAB=null; SPLIT={}; drawControls(); render();}," ngày");
+  seg(document.getElementById("segDays"),DAYOPTS,nDays,v=>{mark(`đổi sang ${v} ngày`); nDays=v; LAB=null; SPLIT={}; drawControls(); render();}," ngày");
   seg(document.getElementById("segMin"),[15,20,25,30],perStop,v=>{mark(`đổi thành ${v} phút mỗi điểm`); perStop=v; drawControls(); render();},"′");
   seg(document.getElementById("segSess"),[180,240,300],sessCap,v=>{mark(`đổi giới hạn buổi thành ${v} phút`); sessCap=v; drawControls(); render();},"′");
 }
