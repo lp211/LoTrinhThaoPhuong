@@ -87,6 +87,23 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--am); outline-offset
 ol{list-style:none; margin:9px 0 0; padding:0; display:flex; flex-direction:column; gap:6px}
 li.stop{display:flex; gap:10px; padding:9px; border:1px solid var(--edge); border-radius:9px; background:var(--paper); align-items:flex-start}
 li.stop.gone{opacity:.5}
+/* Tay nắm để kéo. touch-action:none để ngón tay kéo được điểm chứ không cuộn trang;
+   chỉ đặt trên đúng cái tay nắm, nên chỗ khác vẫn cuộn bình thường. */
+.grab{flex:0 0 26px; height:34px; margin:-4px 0; display:grid; place-items:center; cursor:grab;
+      touch-action:none; color:var(--dim); font-size:1.05rem; user-select:none; border-radius:6px}
+.grab:hover{background:var(--btnh); color:var(--ink)}
+li.stop.drag{opacity:.9; box-shadow:0 6px 18px rgba(0,0,0,.22); border-color:var(--am); cursor:grabbing; position:relative; z-index:5}
+li.stop.ghost{opacity:.25}
+ol.sortable.over{outline:2px dashed var(--am); outline-offset:3px; border-radius:9px}
+li.drop{padding:11px 9px; border:1px dashed var(--edge); border-radius:9px; color:var(--dim); font-size:.8rem; text-align:center}
+.mtag{font-size:.68rem; font-weight:700; color:var(--am); border:1px solid var(--am); border-radius:20px; padding:1px 7px; letter-spacing:.02em}
+li.mark{height:3px; background:var(--am); border-radius:3px; margin:1px 0}
+.mvm{display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; padding:7px; border:1px solid var(--edge); border-radius:8px; background:var(--card)}
+.mvm .mini{display:flex; gap:6px; align-items:center}
+.km{font-weight:400; font-variant-numeric:tabular-nums; color:var(--dim)}
+.km.bad{color:var(--am)}
+.km.good{color:var(--done)}
+.ordm{padding:11px 13px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:space-between; border-color:var(--am)}
 .num{flex:0 0 25px; height:25px; border-radius:50%; display:grid; place-items:center; font-size:.76rem; font-weight:700; font-variant-numeric:tabular-nums; color:#fff}
 .body{flex:1; min-width:0}
 .nm{font-weight:600; font-size:.9rem; word-wrap:break-word}
@@ -200,6 +217,7 @@ button.act.warn:hover{background:var(--am); color:var(--card)}
     <span><i style="background:var(--skip)"></i>Đã bỏ qua</span>
   </div>
 
+  <div class="card ordm" id="ordm" hidden></div>
   <div class="card sess" id="am"></div>
   <div class="card sess" id="pm"></div>
 
@@ -225,6 +243,13 @@ let nDays = 3, perStop = 25, sessCap = 240;
 let day = 0, me = null;
 const state = {};
 let LAB = null, baseCache = {};
+/* Thứ tự chú tự đặt, theo từng ngày: ORD[d] = {am:[...], pm:[...]}.
+   Ngày nào không có trong ORD thì máy tự xếp thứ tự như cũ.
+   Chỉ chứa những điểm CHƯA đi. Điểm đã xong/bỏ qua tự rơi ra, điểm được khôi phục
+   hay chuyển từ ngày khác sang thì fixOrd() chèn lại — nhờ vậy không chỗ nào phải
+   nhớ cập nhật ORD, và không bao giờ mất điểm. */
+let ORD = {};
+const cloneOrd = o => { const r={}; for(const d in o) r[d]={am:o[d].am.slice(), pm:o[d].pm.slice()}; return r; };
 
 /* ---------- polyline ---------- */
 function decode(str){
@@ -460,7 +485,7 @@ function amSet(d){
    sáng được làm xong. Điểm giao ca (nơi sáng dừng, chiều bắt đầu) thì thử hết mọi
    khả năng rồi lấy cặp tổng ngắn nhất: làm vậy quãng đường bằng đúng cách giải một
    vòng như cũ, không mất thêm km nào, mà buổi chiều vẫn nối liền chỗ sáng dừng. */
-function planDay(d){
+function autoPlan(d){
   const AM=amSet(d), act=active(d);
   const amAct=act.filter(i=>AM.has(i)), pmAct=act.filter(i=>!AM.has(i));
   let amPath, pmPath;
@@ -481,8 +506,76 @@ function planDay(d){
           tour: amPath.concat(pmPath.slice(1))};
 }
 
+/* ---------- thứ tự tự đặt ----------
+   Chèn một điểm vào chỗ RẺ NHẤT trong thứ tự chú đã đặt: thử mọi khe của cả hai
+   buổi rồi lấy khe làm tổng quãng đường ngắn nhất. Chỉ điểm mới được xếp chỗ,
+   những điểm chú đã sắp thì giữ nguyên thứ tự. */
+function insertCheap(o,i){
+  let best=null;
+  for(const sec of ["am","pm"]){
+    for(let p=0;p<=o[sec].length;p++){
+      const t={am:o.am.slice(), pm:o.pm.slice()};
+      t[sec].splice(p,0,i);
+      const L=tourLen([ME].concat(t.am,t.pm,[ME]));
+      if(!best||L<best.L) best={L,sec,p};
+    }
+  }
+  o[best.sec].splice(best.p,0,i);
+}
+/* Dọn cho ORD[d] luôn khớp với danh sách điểm chưa đi của ngày d: bỏ điểm đã đi
+   hoặc đã chuyển sang ngày khác, chèn thêm điểm mới được khôi phục hay chuyển tới. */
+function fixOrd(d){
+  const o=ORD[d]; if(!o) return;
+  const act=active(d), A=new Set(act);
+  o.am=o.am.filter(i=>A.has(i)); o.pm=o.pm.filter(i=>A.has(i));
+  const have=new Set(o.am.concat(o.pm));
+  for(const i of act) if(!have.has(i)) insertCheap(o,i);
+}
+function planDay(d){
+  if(!ORD[d]) return autoPlan(d);
+  fixOrd(d);
+  const amIds=ORD[d].am.slice(), pmIds=ORD[d].pm.slice();
+  return {amIds, pmIds, manual:true,
+          pmFrom: amIds.length?amIds[amIds.length-1]:ME,
+          tour: [ME].concat(amIds,pmIds,[ME])};
+}
+const dayKm = d => me?tourLen(planDay(d).tour):0;
+
+/* Chuyển một điểm sang ngày khác. Không cần đụng tới ORD: fixOrd() của hai ngày
+   sẽ tự gỡ ra và tự chèn vào chỗ rẻ nhất khi vẽ lại. */
+function moveTo(i,b){ LAB[i]=b; SPLIT={}; baseCache={}; }
+
+/* Chuyển thử để xem tốn thêm bao nhiêu km, rồi hoàn nguyên y như cũ. */
+function moveCost(i,b){
+  const a=LAB[i];
+  if(a===b) return 0;
+  const before=dayKm(a)+dayKm(b);
+  const kLab=LAB.slice(); kLab.K=LAB.K;
+  const kOrd=cloneOrd(ORD), kSplit=SPLIT;
+  moveTo(i,b);
+  const after=dayKm(a)+dayKm(b);
+  LAB=kLab; ORD=kOrd; SPLIT=kSplit; baseCache={};
+  return after-before;
+}
+/* Kéo thả trong một buổi, hoặc kéo từ buổi này sang buổi kia. */
+function moveStop(d,id,toSec,toIdx){
+  const o=ORD[d]; if(!o) return false;
+  o.am=o.am.filter(j=>j!==id); o.pm=o.pm.filter(j=>j!==id);
+  o[toSec].splice(Math.max(0,Math.min(toIdx,o[toSec].length)),0,id);
+  return true;
+}
+/* Bắt đầu tự đặt thứ tự cho ngày d: lấy thứ tự máy đang xếp làm điểm khởi đầu. */
+function goManual(d){
+  if(ORD[d]) return;
+  const p=autoPlan(d);
+  ORD[d]={am:p.amIds.slice(), pm:p.pmIds.slice()};
+}
+
 function render(){
-  if(!LAB || LAB.K!==nDays){ LAB=clusterDays(nDays); LAB.K=nDays; baseCache={}; SPLIT={}; if(day>=nDays) day=0; }
+  /* Chia lại ngày hay đổi số ngày thì các ngày không còn là các ngày cũ nữa, nên
+     thứ tự chú tự đặt cho chúng cũng hết nghĩa — bỏ hết. Đây là chỗ duy nhất bảng
+     chia ngày được dựng lại, nên chặn ở đây là đủ, khỏi phải nhớ ở từng cái nút. */
+  if(!LAB || LAB.K!==nDays){ LAB=clusterDays(nDays); LAB.K=nDays; baseCache={}; SPLIT={}; ORD={}; if(day>=nDays) day=0; }
   sizeMap();
   const ids=dayIds(day), act=active(day);
   const proj=makeProj(ids.map(i=>S[i]).concat(me?[me]:[]));
@@ -547,10 +640,13 @@ function render(){
 
   /* danh sách */
   const SRC={web:"đã xác minh", rev:"", "rev-ward":"", err:""};
-  const row=(id,k)=>{
+  const row=(id,k,sec)=>{
     const s=S[id], st=state[s.n];
     const col=st==="done"?"var(--done)":st==="skip"?"var(--skip)":(k<half?"var(--am)":"var(--pm)");
-    return `<li class="stop${st?" gone":""}">
+    /* Điểm đã đi nằm ở mục riêng phía dưới, không kéo thả cũng không chuyển ngày. */
+    const drag=sec&&!st;
+    return `<li class="stop${st?" gone":""}"${drag?` data-id="${id}" data-sec="${sec}"`:""}>
+      ${drag?`<div class="grab" data-grab="${id}" title="Kéo để đổi thứ tự" aria-label="Kéo để đổi thứ tự">≡</div>`:""}
       <div class="num" style="background:${col}">${st?(st==="done"?"✓":"×"):k+1}</div>
       <div class="body">
         <div class="nm">${esc(s.n)}</div>
@@ -560,8 +656,10 @@ function render(){
           <a class="mini go" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${s.la}%2C${s.lo}">Mở bản đồ</a>
           ${st?`<button class="mini" data-undo="${esc(s.n)}">Khôi phục</button>`
              :`<button class="mini" data-done="${esc(s.n)}">Đã xong</button>
-               <button class="mini" data-skip="${esc(s.n)}">Bỏ qua</button>`}
+               <button class="mini" data-skip="${esc(s.n)}">Bỏ qua</button>`
+               +(drag&&nDays>1?`<button class="mini" data-mv="${id}" aria-expanded="false">Chuyển sang ▾</button>`:"")}
         </div>
+        ${drag&&nDays>1?`<div class="mvm" id="mv${id}" hidden></div>`:""}
       </div></li>`;
   };
   const legMin=(a,b)=>dist(a,b)/1000/KMH*60;
@@ -571,20 +669,34 @@ function render(){
     for(let i=0;i<list.length-1;i++) t+=legMin(list[i],list[i+1]);
     return t+list.length*perStop;
   };
-  const sect=(el,title,dot,list,off,link,mins)=>{
+  const sect=(el,title,dot,list,off,link,mins,sec)=>{
     const over=mins>sessCap;
     el.innerHTML=`<h2><span class="dot" style="background:${dot}"></span>${title}`
+      +(plan.manual?`<span class="mtag">thứ tự tự đặt</span>`:"")
       +`<span class="meta">${list.length?`${list.length} điểm · ${fmt(mins)}`:"trống"}</span></h2>`
       +(over?`<div class="over"><b>Quá tải:</b> buổi này cần ${fmt(mins)}, dài hơn giới hạn ${fmt(sessCap)} chú đặt. Tăng số ngày, giảm thời gian mỗi điểm, hoặc bỏ bớt điểm.</div>`:"")
-      +(list.length?`<ol>${list.map((id,k)=>row(id,k+off)).join("")}</ol>`:"")
+      +(list.length?`<ol class="sortable" data-sec="${sec}">${list.map((id,k)=>row(id,k+off,sec)).join("")}</ol>`
+                   :`<ol class="sortable empty" data-sec="${sec}"><li class="drop">Kéo điểm vào đây</li></ol>`)
       +(link?`<div class="acts" style="padding:9px 0 4px"><a class="mini go" target="_blank" rel="noopener" href="${link}">Chỉ đường cả buổi trên Google Maps</a></div>`:"");
   };
   if(me){
     sect(document.getElementById("am"),"Buổi sáng","var(--am)",amIds,0,
-         amIds.length?gmaps(ME,amIds.slice(0,-1),amIds[amIds.length-1]):null, sessMin(amIds,ME));
+         amIds.length?gmaps(ME,amIds.slice(0,-1),amIds[amIds.length-1]):null, sessMin(amIds,ME),"am");
     sect(document.getElementById("pm"),"Buổi chiều","var(--pm)",pmIds,half,
-         pmIds.length?gmaps(pmFrom,pmIds,ME):null, sessMin(pmIds,pmFrom)+ (pmIds.length?legMin(pmIds[pmIds.length-1],ME):0));
+         pmIds.length?gmaps(pmFrom,pmIds,ME):null, sessMin(pmIds,pmFrom)+ (pmIds.length?legMin(pmIds[pmIds.length-1],ME):0),"pm");
+    /* Tự đặt thứ tự thì cho biết đang tốn thêm bao nhiêu km so với cách máy xếp,
+       và luôn có đường quay về. Không giấu cái giá phải trả. */
+    const mp=document.getElementById("ordm");
+    if(plan.manual){
+      const mine=tourLen(plan.tour)/1000, best=tourLen(autoPlan(day).tour)/1000;
+      const gap=mine-best;
+      mp.hidden=false;
+      mp.innerHTML=`<div><b>Ngày ${day+1} đang xếp theo thứ tự chú tự đặt.</b>`
+        +`<div class="hintline">${mine.toFixed(1)} km — ${gap>0.05?`dài hơn ${gap.toFixed(1)} km so với thứ tự máy xếp (${best.toFixed(1)} km)`:gap<-0.05?`ngắn hơn thứ tự máy xếp ${(-gap).toFixed(1)} km`:`bằng đúng thứ tự máy xếp`}. Máy không tự xếp lại ngày này nữa.</div></div>`
+        +`<button class="act" id="ordb">Trả về thứ tự máy xếp</button>`;
+    } else mp.hidden=true;
   } else {
+    document.getElementById("ordm").hidden=true;
     document.getElementById("am").innerHTML=
       `<h2><span class="dot" style="background:var(--dim)"></span>Chưa xếp thứ tự<span class="meta">${ids.length} điểm</span></h2>`
       +`<ol>${ids.map(i=>`<li class="stop"><div class="num" style="background:var(--dim)">•</div><div class="body"><div class="nm">${esc(S[i].n)}</div>${S[i].a?`<div class="addr">${esc(S[i].a)}${S[i].s==="web"?`<span class="vsrc">đã xác minh</span>`:""}</div>`:""}${S[i].t?`<div class="note ${S[i].k}"><span class="tagn">${TAG[S[i].k]}</span><span>${esc(S[i].t)}</span></div>`:""}</div></li>`).join("")}</ol>`;
@@ -645,6 +757,7 @@ let UNDO=[], REDO=[];
 /* Mỗi ảnh chụp mang theo TÊN của thao tác diễn ra ngay sau nó, để hộp xác nhận nói
    rõ sắp hoàn tác cái gì — hỏi trống không thì chú cũng chỉ bấm Đồng ý cho xong. */
 const snap=lb=>({ state:{...state}, LAB:LAB?LAB.slice():null, LABK:LAB?LAB.K:null,
+                  ORD:cloneOrd(ORD),
                   nDays, perStop, sessCap, day, me:me?{...me}:null, label:lb||"" });
 function mark(label){
   UNDO.push(snap(label));
@@ -655,6 +768,7 @@ function apply(s){
   Object.keys(state).forEach(k=>delete state[k]);
   Object.assign(state,s.state);
   if(s.LAB){ LAB=s.LAB.slice(); LAB.K=s.LABK; } else LAB=null;
+  ORD=s.ORD?cloneOrd(s.ORD):{};
   nDays=s.nDays; perStop=s.perStop; sessCap=s.sessCap; day=s.day;
   me=s.me?{...s.me}:null;
   SPLIT={}; baseCache={};          // tính lại được từ LAB + điểm xuất phát nên cứ xoá
@@ -690,6 +804,20 @@ const okMe   = m => m && typeof m.la==="number" && typeof m.lo==="number"
 const okMark = v => v==="done" || v==="skip";
 const okLab  = (l,k) => Array.isArray(l) && l.length===N
                       && l.every(v=>Number.isInteger(v) && v>=0 && v<k);
+/* Thứ tự tự đặt đọc từ máy: chỉ nhận nếu đúng khuôn và không có điểm lạ, điểm lặp.
+   Còn chuyện điểm nào thuộc ngày nào thì fixOrd() tự chỉnh lúc vẽ, khỏi bắt bẻ ở đây. */
+const okOrd = (o,k) => {
+  if(!o || typeof o!=="object" || Array.isArray(o)) return false;
+  return Object.keys(o).every(key=>{
+    const d=Number(key);
+    if(!Number.isInteger(d) || d<0 || d>=k) return false;
+    const v=o[key];
+    if(!v || typeof v!=="object" || !Array.isArray(v.am) || !Array.isArray(v.pm)) return false;
+    const all=v.am.concat(v.pm);
+    return all.every(x=>Number.isInteger(x) && x>=0 && x<N) && new Set(all).size===all.length;
+  });
+};
+const cleanOrd = (o,k) => okOrd(o,k) ? cloneOrd(o) : {};
 
 /* Lọc một ảnh chụp đã lưu; có gì sai thì trả null chứ không tin bừa. */
 function cleanSnap(o){
@@ -703,6 +831,7 @@ function cleanSnap(o){
     Object.entries(o.state).forEach(([k,v])=>{ if(okMark(v)) st[k]=v; });
   const lab = okLab(o.LAB,o.nDays) && o.LABK===o.nDays ? o.LAB.slice() : null;
   return { state:st, LAB:lab, LABK:lab?o.nDays:null,
+           ORD: cleanOrd(o.ORD,o.nDays),
            nDays:o.nDays, perStop:o.perStop, sessCap:o.sessCap, day:o.day,
            me: okMe(o.me)?{la:o.me.la,lo:o.me.lo}:null,
            label: typeof o.label==="string" ? o.label.slice(0,80) : "" };
@@ -711,7 +840,7 @@ function cleanSnap(o){
 function save(){
   try{
     localStorage.setItem(KEY,JSON.stringify({me,state,nDays,perStop,sessCap,day,
-      LAB:LAB?Array.from(LAB):null, LABK:LAB?LAB.K:null, undo:UNDO, redo:REDO}));
+      LAB:LAB?Array.from(LAB):null, LABK:LAB?LAB.K:null, ORD, undo:UNDO, redo:REDO}));
   }catch(e){ /* chế độ riêng tư hoặc hết dung lượng — cứ chạy tiếp, chỉ là không nhớ được */ }
 }
 function load(){
@@ -726,6 +855,8 @@ function load(){
   if([180,240,300].includes(d.sessCap)) sessCap=d.sessCap;
   if(Number.isInteger(d.day) && d.day>=0 && d.day<nDays) day=d.day;
   if(okLab(d.LAB,nDays) && d.LABK===nDays){ LAB=d.LAB.slice(); LAB.K=nDays; }
+  /* Không có bảng chia ngày thì thứ tự tự đặt cũng vô nghĩa, bỏ luôn cho khỏi lệch. */
+  ORD = LAB ? cleanOrd(d.ORD,nDays) : {};
   if(Array.isArray(d.undo))
     UNDO=d.undo.map(cleanSnap).filter(Boolean).slice(-MAXUNDO);
   if(Array.isArray(d.redo))
@@ -741,7 +872,7 @@ function load(){
 function hardReset(){
   Object.keys(state).forEach(k=>delete state[k]);
   me=null; nDays=3; perStop=25; sessCap=240; day=0; LAB=null;
-  UNDO=[]; REDO=[]; SPLIT={}; baseCache={};
+  UNDO=[]; REDO=[]; SPLIT={}; baseCache={}; ORD={};
   try{ localStorage.removeItem(KEY); }catch(e){}
   hint.textContent=NOSTART; ares.textContent="";
   document.getElementById("clr").disabled=true;
@@ -770,7 +901,109 @@ document.addEventListener("click",e=>{
   if(d){ mark(`đánh dấu xong ${d}`); state[d]="done"; render(); }
   if(s){ mark(`bỏ qua ${s}`); state[s]="skip"; render(); }
   if(u){ mark(`khôi phục ${u}`); delete state[u]; render(); }
+
+  /* mở bảng “Chuyển sang ngày…”: tính km lúc mở chứ không tính sẵn cho cả 49 điểm */
+  const mv=t.getAttribute("data-mv");
+  if(mv!==null){
+    const i=+mv, box=document.getElementById("mv"+i), wasOpen=!box.hidden;
+    document.querySelectorAll(".mvm").forEach(b=>b.hidden=true);
+    document.querySelectorAll("[data-mv]").forEach(b=>b.setAttribute("aria-expanded","false"));
+    if(wasOpen) return;
+    box.innerHTML=[...Array(nDays).keys()].filter(b=>b!==LAB[i]).map(b=>{
+      const c=moveCost(i,b)/1000;
+      return `<button class="mini" data-mvto="${i}|${b}">Ngày ${b+1}`
+        +`<span class="km ${c>0.05?"bad":c<-0.05?"good":""}">${c>0.05?"+":c<-0.05?"−":"±"}${Math.abs(c).toFixed(1)} km</span></button>`;
+    }).join("")
+      +`<span class="hintline" style="width:100%">Số km là đường của ngày này và ngày kia cộng lại, dài thêm bao nhiêu nếu chuyển.</span>`;
+    box.hidden=false; t.setAttribute("aria-expanded","true");
+    return;
+  }
+  const to=t.getAttribute("data-mvto");
+  if(to){
+    const [i,b]=to.split("|").map(Number);
+    mark(`chuyển ${S[i].n} sang ngày ${b+1}`);
+    moveTo(i,b); render();
+    return;
+  }
+  if(t.id==="ordb"){ mark(`trả ngày ${day+1} về thứ tự máy xếp`); delete ORD[day]; SPLIT={}; render(); }
 });
+
+/* ---------- kéo thả đổi thứ tự ----------
+   Dùng pointer event nên chạy được cả chuột lẫn ngón tay (HTML5 drag-and-drop
+   không dùng được trên điện thoại). Trong lúc kéo chỉ hiện vạch báo chỗ sẽ thả,
+   tới khi thả mới xếp lại thật — làm vậy đỡ rối và đỡ sinh lỗi.
+   Kéo được cả sang buổi kia, để dồn bớt việc từ sáng sang chiều hay ngược lại. */
+let DRAG=null;
+function dmark(){
+  let m=document.getElementById("dmark");
+  if(!m){ m=document.createElement("li"); m.id="dmark"; m.className="mark"; }
+  return m;
+}
+function dropAt(x,y){
+  const ol=[...document.querySelectorAll("ol.sortable")].find(o=>{
+    const r=o.getBoundingClientRect();
+    return x>=r.left-30 && x<=r.right+30 && y>=r.top-12 && y<=r.bottom+12;
+  });
+  if(!ol) return null;
+  const items=[...ol.querySelectorAll("li.stop")].filter(li=>li!==DRAG.li);
+  let idx=items.length;
+  for(let k=0;k<items.length;k++){
+    const r=items[k].getBoundingClientRect();
+    if(y < r.top+r.height/2){ idx=k; break; }
+  }
+  return {ol, sec:ol.getAttribute("data-sec"), idx, items};
+}
+document.addEventListener("pointerdown",e=>{
+  const h=e.target.closest && e.target.closest(".grab");
+  if(!h) return;
+  const li=h.closest("li.stop");
+  if(!li || !li.getAttribute("data-id")) return;
+  e.preventDefault();
+  DRAG={ id:+li.getAttribute("data-id"), li, y0:e.clientY, moved:false };
+  li.classList.add("drag");
+  h.setPointerCapture(e.pointerId);
+});
+document.addEventListener("pointermove",e=>{
+  if(!DRAG) return;
+  e.preventDefault();
+  const dy=e.clientY-DRAG.y0;
+  if(!DRAG.moved && Math.abs(dy)<4) return;    // lỡ rung tay thì chưa tính là kéo
+  DRAG.moved=true;
+  DRAG.li.style.transform=`translateY(${dy}px)`;
+  document.querySelectorAll("ol.sortable.over").forEach(o=>o.classList.remove("over"));
+  const t=dropAt(e.clientX,e.clientY);
+  const m=dmark();
+  if(!t){ m.remove(); DRAG.t=null; return; }
+  DRAG.t=t;
+  t.ol.classList.add("over");
+  if(t.idx>=t.items.length) t.ol.append(m); else t.ol.insertBefore(m,t.items[t.idx]);
+  /* kéo tới sát mép thì cuộn trang theo, danh sách dài mới với tới được */
+  const vh=window.innerHeight;
+  if(e.clientY<70) window.scrollBy(0,-11);
+  else if(e.clientY>vh-70) window.scrollBy(0,11);
+});
+function dragEnd(){
+  if(!DRAG) return;
+  const {li,id,t,moved}=DRAG;
+  li.classList.remove("drag"); li.style.transform="";
+  dmark().remove();
+  document.querySelectorAll("ol.sortable.over").forEach(o=>o.classList.remove("over"));
+  DRAG=null;
+  if(!moved || !t) return;
+  /* Thử trước xem có đổi gì thật không: thả lại đúng chỗ cũ thì đừng ghi vào lịch
+     sử hoàn tác, mà cũng đừng biến ngày đang để máy xếp thành ngày tự đặt. */
+  const p=autoPlan(day);
+  const base=ORD[day]||{am:p.amIds.slice(), pm:p.pmIds.slice()};
+  const next={am:base.am.filter(j=>j!==id), pm:base.pm.filter(j=>j!==id)};
+  next[t.sec].splice(Math.max(0,Math.min(t.idx,next[t.sec].length)),0,id);
+  if(next.am.join()===base.am.join() && next.pm.join()===base.pm.join()) return;
+  mark(`đổi chỗ ${S[id].n}`);   // chụp TRƯỚC khi chuyển sang tự đặt, để còn hoàn tác về máy xếp
+  goManual(day);
+  moveStop(day,id,t.sec,t.idx);
+  render();
+}
+document.addEventListener("pointerup",dragEnd);
+document.addEventListener("pointercancel",dragEnd);
 const map=document.getElementById("map");
 const hint=document.getElementById("hint"), ares=document.getElementById("ares");
 const NOSTART="Chưa có điểm xuất phát. Bấm “Dùng vị trí của chú”, nhập địa chỉ, hoặc chạm thẳng vào bản đồ.";
