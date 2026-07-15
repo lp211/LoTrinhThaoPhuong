@@ -613,8 +613,11 @@ function render(){
 /* ---------- hoàn tác ----------
    Chụp lại toàn bộ tình trạng TRƯỚC mỗi thao tác, bấm Hoàn tác thì trả về y như cũ.
    Che được cả những nút xoá nhiều thứ như “Chia lại” hay “Xoá hết đánh dấu”:
-   lỡ tay vẫn lấy lại được. Không lưu lịch sử hoàn tác xuống máy — mở lại trang là
-   bắt đầu lại từ đầu, nhưng đánh dấu thì vẫn còn nguyên. */
+   lỡ tay vẫn lấy lại được.
+   Lịch sử hoàn tác cũng lưu xuống máy luôn. Điện thoại hay tự dẹp tab chạy nền,
+   mà chú thì đóng/mở trang suốt cả ngày; nếu không lưu thì cứ mở lại là mất sạch
+   lịch sử — đúng lúc cần hoàn tác nhất (lỡ bấm Chia lại rồi tab bị dẹp) lại không
+   còn gì để trả về. */
 const MAXUNDO=40;
 let UNDO=[];
 const snap=()=>({ state:{...state}, LAB:LAB?LAB.slice():null, LABK:LAB?LAB.K:null,
@@ -637,23 +640,53 @@ function undo(){
   render();
 }
 
+/* Số 1 trong tên khoá là phiên bản dữ liệu. Ảnh chụp có giữ bảng chia ngày (LAB),
+   là thứ bên trong máy tự tính; mai này đổi cách chia ngày thì tăng lên v2, dữ liệu
+   cũ tự bị bỏ qua, khỏi lo trả về một bảng do bản cũ tính ra. */
 const KEY="lotrinh-thaophuong-v1";
+
+const okMe   = m => m && typeof m.la==="number" && typeof m.lo==="number"
+                      && isFinite(m.la) && isFinite(m.lo);
+const okMark = v => v==="done" || v==="skip";
+const okLab  = (l,k) => Array.isArray(l) && l.length===N
+                      && l.every(v=>Number.isInteger(v) && v>=0 && v<k);
+
+/* Lọc một ảnh chụp đã lưu; có gì sai thì trả null chứ không tin bừa. */
+function cleanSnap(o){
+  if(!o || typeof o!=="object") return null;
+  if(![3,4,5].includes(o.nDays)) return null;
+  if(![15,20,25,30].includes(o.perStop)) return null;
+  if(![180,240,300].includes(o.sessCap)) return null;
+  if(!Number.isInteger(o.day) || o.day<0 || o.day>=o.nDays) return null;
+  const st={};
+  if(o.state && typeof o.state==="object")
+    Object.entries(o.state).forEach(([k,v])=>{ if(okMark(v)) st[k]=v; });
+  const lab = okLab(o.LAB,o.nDays) && o.LABK===o.nDays ? o.LAB.slice() : null;
+  return { state:st, LAB:lab, LABK:lab?o.nDays:null,
+           nDays:o.nDays, perStop:o.perStop, sessCap:o.sessCap, day:o.day,
+           me: okMe(o.me)?{la:o.me.la,lo:o.me.lo}:null };
+}
+
 function save(){
   try{
-    localStorage.setItem(KEY,JSON.stringify({me,state,nDays,perStop,sessCap,day}));
+    localStorage.setItem(KEY,JSON.stringify({me,state,nDays,perStop,sessCap,day,
+      LAB:LAB?Array.from(LAB):null, LABK:LAB?LAB.K:null, undo:UNDO}));
   }catch(e){ /* chế độ riêng tư hoặc hết dung lượng — cứ chạy tiếp, chỉ là không nhớ được */ }
 }
 function load(){
   let d;
   try{ d=JSON.parse(localStorage.getItem(KEY)||"null"); }catch(e){ return; }
   if(!d || typeof d!=="object") return;
-  if(d.me && typeof d.me.la==="number" && typeof d.me.lo==="number") me=d.me;
+  if(okMe(d.me)) me={la:d.me.la,lo:d.me.lo};
   if(d.state && typeof d.state==="object")
-    Object.entries(d.state).forEach(([k,v])=>{ if(v==="done"||v==="skip") state[k]=v; });
+    Object.entries(d.state).forEach(([k,v])=>{ if(okMark(v)) state[k]=v; });
   if([3,4,5].includes(d.nDays)) nDays=d.nDays;
   if([15,20,25,30].includes(d.perStop)) perStop=d.perStop;
   if([180,240,300].includes(d.sessCap)) sessCap=d.sessCap;
   if(Number.isInteger(d.day) && d.day>=0 && d.day<nDays) day=d.day;
+  if(okLab(d.LAB,nDays) && d.LABK===nDays){ LAB=d.LAB.slice(); LAB.K=nDays; }
+  if(Array.isArray(d.undo))
+    UNDO=d.undo.map(cleanSnap).filter(Boolean).slice(-MAXUNDO);
   if(me){
     hint.textContent=`Điểm xuất phát đã lưu (${me.la.toFixed(5)}, ${me.lo.toFixed(5)}). Chạm vào bản đồ để đổi.`;
     document.getElementById("clr").disabled=false;
